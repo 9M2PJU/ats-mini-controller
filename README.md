@@ -54,18 +54,24 @@ sudo reboot
 
 Then browse to `http://<host>:8731`.
 
-### Native packages (.deb / .rpm / AUR / AppImage / 1-liner)
+### Native package (.deb / 1-liner)
 
 Prebuilt releases install the same app without Docker: files under
 `/opt/ats-mini-controller` (bundled `venv`), a `ats-mini-controller.service`
-systemd unit, udev rules for the dongle, and a DVB blacklist — see
-`packaging/` for the unit, rules, `postinst`/`prerm`, RPM spec, AUR
-(`packaging/aur/`), and builders.
+systemd unit (which calls the PORT-aware `/usr/bin/ats-mini-controller`
+launcher), udev rules for the dongle, and a DVB blacklist — see
+`packaging/` for the unit, rules, `postinst`/`prerm`, and the builder.
+`.rpm`/AUR/AppImage are deferred to follow-up PRs; this PR ships the
+`.deb` path only.
 
-One-liner (detects apt vs dnf/zypper vs pacman/AUR, falls back to pip+systemd):
+One-liner (Debian/Ubuntu/RPi OS; verifies the published SHA256 checksum
+before installing, and every dependency step is fatal):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/jsawyerdev/ats-mini-controller/main/install.sh | bash
+# custom port / pinned version / source build:
+curl -fsSL .../install.sh | bash -s -- --port 8732 --version v2.12.0
+curl -fsSL .../install.sh | bash -s -- --manual  # build from the pinned git tag
 ```
 
 Manual install:
@@ -74,27 +80,15 @@ Manual install:
 # Debian/Ubuntu/RPi OS (amd64/arm64/armhf)
 sudo dpkg -i dist/ats-mini-controller_2.12.0_amd64.deb
 sudo apt-get install -f -y   # pulls rtl-sdr + libusb if missing
-
-# Fedora/RHEL/openSUSE
-sudo dnf install ./dist/ats-mini-controller-2.12.0-1.x86_64.rpm
-
-# Arch Linux (AUR; -git tracks the branch until upstream tags releases)
-yay -S ats-mini-controller-git
-# or: paru -S ats-mini-controller-git
-# or manual: cd packaging/aur/ats-mini-controller-git && makepkg -si
-sudo systemctl enable --now ats-mini-controller.service
-
-# Portable (no system integration; still needs the udev/blacklist step once)
-chmod +x ats-mini-controller-2.12.0-x86_64.AppImage
-./ats-mini-controller-2.12.0-x86_64.AppImage
+echo "PORT=8732" | sudo tee /etc/ats-mini-controller/env
+sudo systemctl restart ats-mini-controller.service
 ```
 
-Build them from source (`gem install fpm` for .deb/.rpm):
+Build it from source (`gem install fpm`):
 
 ```bash
-packaging/build-packages.sh        # -> dist/*.deb, dist/*.rpm
-packaging/build-appimage.sh       # -> dist/*.AppImage (needs appimagetool)
-cd packaging/aur/ats-mini-controller-git && makepkg -si   # Arch/AUR (-git)
+packaging/build-packages.sh        # -> dist/*.deb
+packaging/test-packaging.sh       # isolated build/install smoke test (no root needed)
 ```
 
 First install usually needs one reboot to release the DVB kernel modules.

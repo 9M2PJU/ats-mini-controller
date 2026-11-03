@@ -1,0 +1,34 @@
+name: packaging
+
+on:
+  push:
+    paths:
+      - "packaging/**"
+      - "install.sh"
+      - "app.py"
+      - ".github/workflows/packaging.yml"
+  pull_request:
+    paths:
+      - "packaging/**"
+      - "install.sh"
+      - "app.py"
+      - ".github/workflows/packaging.yml"
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Isolated package build/install smoke test
+        run: packaging/test-packaging.sh
+      - name: ShellCheck (when available)
+        run: |
+          if command -v shellcheck >/dev/null 2>&1; then
+            shellcheck -S warning install.sh packaging/build-packages.sh \
+              packaging/test-packaging.sh packaging/postinst packaging/prerm
+          else
+            echo "shellcheck not installed; bash -n checks already ran in the smoke test."
+          fi

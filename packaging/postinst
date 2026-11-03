@@ -32,6 +32,13 @@ if [ -d /run/systemd/system ]; then
     systemctl restart ats-mini-controller.service || true
 fi
 
-echo "ats-mini-controller installed. Open http://<host>:8731 on your LAN."
+# Report the effective port (install.sh persists PORT=... here).
+if [ -r /etc/ats-mini-controller/env ]; then
+    # shellcheck disable=SC1091
+    . /etc/ats-mini-controller/env
+fi
+
+echo "ats-mini-controller installed. Open http://<host>:${PORT:-8731} on your LAN."
+echo "Set PORT=... in /etc/ats-mini-controller/env then 'systemctl restart ats-mini-controller.service' to change it."
 echo "If the dongle is not detected, reboot once to release the DVB kernel modules."
 exit 0

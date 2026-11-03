@@ -1,31 +1,41 @@
-# fpm-based builder for ats-mini-controller native packages.
+#!/usr/bin/env bash
+# fpm-based builder for the ats-mini-controller native .deb package.
+# This is the single supported native packaging path (Debian/Ubuntu/RPi OS).
 # Usage:
 #   packaging/build-packages.sh [--version 2.12.0] [--arch amd64|arm64]
-# Requires: fpm (gem install fpm), python3-venv, dpkg-deb (for .deb checks).
+#   packaging/build-packages.sh --stage-only   # stage payload, skip fpm (CI smoke test)
+# Requires: fpm (gem install fpm), python3-venv (for the .deb payload).
 #
 # The single source of truth for the version is app.py (APP_VERSION).
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+STAGE_ONLY=0
+if [ "${1:-}" = "--stage-only" ]; then STAGE_ONLY=1; shift; fi
 
 VERSION="${1:-}"
 if [ -z "$VERSION" ] || [ "$VERSION" = "--version" ]; then
     VERSION="$(python3 -c "import re; print(re.search(r'APP_VERSION = \"([^\"]+)\"', open('app.py').read()).group(1))")"
 fi
 # Allow: build-packages.sh --version X.Y.Z  or  build-packages.sh X.Y.Z
-if [ "${1:-}" = "--version" ]; then VERSION="${2:-$VERSION}"; fi
-ARCH_FLAG="${3:-}"
+if [ "${1:-}" = "--version" ]; then VERSION="${2:-$VERSION}"; shift 2 || true; fi
+# Guard: a bare "--version" with no value falls back to app.py.
+case "$VERSION" in
+    -*|"") VERSION="$(python3 -c "import re; print(re.search(r'APP_VERSION = \"([^\"]+)\"', open('app.py').read()).group(1))")" ;;
+esac
+ARCH_FLAG="${1:-}"
 UNAME_M="$(uname -m)"
 case "$UNAME_M" in
-    x86_64)  DEB_ARCH="amd64"; RPM_ARCH="x86_64" ;;
-    aarch64) DEB_ARCH="arm64"; RPM_ARCH="aarch64" ;;
-    armv7l)  DEB_ARCH="armhf"; RPM_ARCH="armhfp" ;;
-    *)       DEB_ARCH="amd64"; RPM_ARCH="x86_64" ;;
+    x86_64)  DEB_ARCH="amd64" ;;
+    aarch64) DEB_ARCH="arm64" ;;
+    armv7l)  DEB_ARCH="armhf" ;;
+    *)       DEB_ARCH="amd64" ;;
 esac
 if [ -n "$ARCH_FLAG" ]; then
     case "$ARCH_FLAG" in
-        amd64|x86_64) DEB_ARCH="amd64"; RPM_ARCH="x86_64" ;;
-        arm64|aarch64) DEB_ARCH="arm64"; RPM_ARCH="aarch64" ;;
-        armhf|armv7l) DEB_ARCH="armhf"; RPM_ARCH="armhfp" ;;
+        amd64|x86_64) DEB_ARCH="amd64" ;;
+        arm64|aarch64) DEB_ARCH="arm64" ;;
+        armhf|armv7l) DEB_ARCH="armhf" ;;
     esac
 fi
 
@@ -33,7 +43,7 @@ STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 APP_DIR="$STAGE/opt/ats-mini-controller"
 
-echo "Building ats-mini-controller $VERSION ($DEB_ARCH / $RPM_ARCH) ..."
+echo "Building ats-mini-controller $VERSION ($DEB_ARCH) ..." >&2
 
 python3 -m venv "$APP_DIR/venv"
 "$APP_DIR/venv/bin/pip" install --no-cache-dir -r requirements.txt
@@ -49,9 +59,17 @@ mkdir -p "$STAGE/lib/systemd/system" "$STAGE/lib/udev/rules.d" "$STAGE/etc/modpr
 cp packaging/ats-mini-controller.service "$STAGE/lib/systemd/system/"
 cp packaging/66-rtl-sdr.rules "$STAGE/lib/udev/rules.d/"
 cp packaging/blacklist-rtlsdr.conf "$STAGE/etc/modprobe.d/blacklist-rtlsdr.conf"
-printf '#!/bin/sh\nexec /opt/ats-mini-controller/venv/bin/python -m uvicorn app:app --host "${HOST:-0.0.0.0}" --port "${PORT:-8731}"\n' > "$STAGE/usr/bin/ats-mini-controller"
+# PORT/HOST-aware launcher; the systemd unit calls this so that
+# PORT=... in /etc/ats-mini-controller/env is effective.
+printf '#!/bin/sh\nexec /opt/ats-mini-controller/venv/bin/python -m uvicorn app:app --app-dir /opt/ats-mini-controller --host "${HOST:-0.0.0.0}" --port "${PORT:-8731}"\n' > "$STAGE/usr/bin/ats-mini-controller"
 chmod 755 "$STAGE/usr/bin/ats-mini-controller" packaging/postinst packaging/prerm
 mkdir -p dist
+
+if [ "$STAGE_ONLY" -eq 1 ]; then
+    trap - EXIT
+    echo "$STAGE"
+    exit 0
+fi
 
 if command -v fpm >/dev/null 2>&1; then
     fpm -s dir -t deb -C "$STAGE" \
@@ -64,20 +82,11 @@ if command -v fpm >/dev/null 2>&1; then
         --deb-systemd packaging/ats-mini-controller.service \
         -p "dist/ats-mini-controller_${VERSION}_${DEB_ARCH}.deb" \
         opt lib usr etc
-    fpm -s dir -t rpm -C "$STAGE" \
-        -n ats-mini-controller -v "$VERSION" -a "$RPM_ARCH" \
-        --description "RTL-SDR station browser, signal scanner and CW decoder" \
-        --url "https://github.com/jsawyerdev/ats-mini-controller" \
-        --license MIT \
-        --depends libusb1 --depends python3 \
-        --after-install packaging/postinst --before-remove packaging/prerm \
-        -p "dist/ats-mini-controller-${VERSION}-1.${RPM_ARCH}.rpm" \
-        opt lib usr etc
-    echo "Wrote dist/:"
-    ls -lh dist/
+    echo "Wrote dist/:" >&2
+    ls -lh dist/ >&2
 else
-    echo "fpm not found (gem install fpm). Staging tree left at: $STAGE"
-    echo "Install fpm and re-run to emit .deb/.rpm into dist/."
+    echo "fpm not found (gem install fpm). Staging tree left at: $STAGE" >&2
+    echo "Install fpm and re-run to emit dist/*.deb." >&2
     trap - EXIT
     echo "$STAGE"
 fi
